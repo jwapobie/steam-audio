@@ -459,6 +459,11 @@ void reset(FMOD_DSP_STATE* state)
     effect->simulationSource[1] = nullptr;
     effect->newSimulationSourceWritten = false;
 
+    // Report full gain until the first process call computes the real value. FMOD skips mixing channels whose
+    // audibility is zero, so a zero here silences the start of every newly created instance.
+    effect->overallGain.linear_gain = 1.0f;
+    effect->overallGain.linear_gain_additive = 0.0f;
+
     effect->prevDirectMixLevel = 1.0f;
     effect->prevReflectionsMixLevel = 0.0f;
     effect->prevPathingMixLevel = 0.0f;
