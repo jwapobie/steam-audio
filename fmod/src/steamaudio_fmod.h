@@ -75,6 +75,7 @@ extern std::atomic<bool> gIsSimulationSettingsValid;
 extern std::atomic<bool> gNewReverbSourceWritten;
 extern std::atomic<bool> gNewReflectionMixerWritten;
 extern std::atomic<bool> gHRTFDisabled;
+extern std::atomic<float> gReverbSmoothingTime;
 
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -700,5 +701,16 @@ F_EXPORT void F_CALL iplFMODRemoveSource(IPLint32 handle);
  *  \param[in]  disabled    Whether or not HRTF-based binaural rendering should be disabled.
  */
 F_EXPORT void F_CALL iplFMODSetHRTFDisabled(bool disabled);
+
+/**
+ *  Sets how quickly the Steam Audio Reverb effect follows changes in the simulated reverb times of the reverb
+ *  source. Real-time reflection simulation is noisy, so applying each new result as-is makes the reverb level
+ *  jump at every simulation update. Instead, the effect eases its reverb times toward the latest result on every
+ *  audio block, exponentially in log space, with this time constant.
+ *
+ *  \param[in]  seconds     Smoothing time constant, in seconds. 0 applies every result immediately, as stock
+ *                          Steam Audio does. Defaults to 0.5.
+ */
+F_EXPORT void F_CALL iplFMODSetReverbSmoothingTime(float seconds);
 
 }

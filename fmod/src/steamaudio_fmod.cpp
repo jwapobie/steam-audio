@@ -45,6 +45,7 @@ std::atomic<bool> gIsSimulationSettingsValid{ false };
 std::atomic<bool> gNewReverbSourceWritten{ false };
 std::atomic<bool> gNewReflectionMixerWritten{ false };
 std::atomic<bool> gHRTFDisabled{ false };
+std::atomic<float> gReverbSmoothingTime{ 0.5f };
 
 std::shared_ptr<SourceManager> gSourceManager;
 
@@ -532,4 +533,9 @@ void F_CALL iplFMODRemoveSource(IPLint32 handle)
 void F_CALL iplFMODSetHRTFDisabled(bool disabled)
 {
     gHRTFDisabled = disabled;
+}
+
+void F_CALL iplFMODSetReverbSmoothingTime(float seconds)
+{
+    gReverbSmoothingTime = std::max(seconds, 0.0f);
 }
