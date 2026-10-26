@@ -60,44 +60,8 @@ struct State
     bool hasTail;
     bool shouldProcessTail;
 
-    // Reverb times actually applied, eased toward the reverb source's latest simulation outputs.
-    float smoothedReverbTimes[IPL_NUM_BANDS];
-    bool hasSmoothedReverbTimes;
+    ReflectionParamsSmoother smoother;
 };
-
-// Eases the reverb times in params toward their new values (see iplFMODSetReverbSmoothingTime). Works in log space,
-// so a given ratio changes equally fast whether the reverb is short or long.
-void smoothReverbTimes(State* effect, IPLReflectionEffectParams& params, int samplingRate, unsigned int frameSize)
-{
-    for (auto i = 0; i < IPL_NUM_BANDS; ++i)
-    {
-        // Reverb times are zero until the first simulation result arrives; there is nothing to ease toward yet.
-        if (!(params.reverbTimes[i] > 0.0f))
-        {
-            effect->hasSmoothedReverbTimes = false;
-            return;
-        }
-    }
-
-    float smoothingTime = gReverbSmoothingTime;
-    if (!effect->hasSmoothedReverbTimes || smoothingTime <= 0.0f || samplingRate <= 0)
-    {
-        memcpy(effect->smoothedReverbTimes, params.reverbTimes, sizeof(effect->smoothedReverbTimes));
-        effect->hasSmoothedReverbTimes = true;
-        return;
-    }
-
-    auto blockDuration = static_cast<float>(frameSize) / static_cast<float>(samplingRate);
-    auto alpha = 1.0f - expf(-blockDuration / smoothingTime);
-
-    for (auto i = 0; i < IPL_NUM_BANDS; ++i)
-    {
-        auto current = logf(effect->smoothedReverbTimes[i]);
-        auto target = logf(params.reverbTimes[i]);
-        effect->smoothedReverbTimes[i] = expf(current + alpha * (target - current));
-        params.reverbTimes[i] = effect->smoothedReverbTimes[i];
-    }
-}
 
 enum InitFlags
 {
@@ -230,7 +194,7 @@ void reset(FMOD_DSP_STATE* state)
     effect->ambisonicsState = IPL_AUDIOEFFECTSTATE_TAILCOMPLETE;
     effect->hasTail = false;
     effect->shouldProcessTail = false;
-    effect->hasSmoothedReverbTimes = false;
+    effect->smoother.reset();
 }
 
 FMOD_RESULT F_CALL create(FMOD_DSP_STATE* state)
@@ -438,7 +402,7 @@ FMOD_RESULT F_CALL process(FMOD_DSP_STATE* state,
             reflectionParams.tanDevice = gSimulationSettings.tanDevice;
 
             if (reflectionParams.type == IPL_REFLECTIONEFFECTTYPE_PARAMETRIC || reflectionParams.type == IPL_REFLECTIONEFFECTTYPE_HYBRID)
-                smoothReverbTimes(effect, reflectionParams, samplingRate, frameSize);
+                effect->smoother.apply(reflectionParams, samplingRate, frameSize);
 
             effect->reflectionState = iplReflectionEffectApply(effect->reflectionEffect, &reflectionParams, &effect->monoBuffer, &effect->reflectionsBuffer, gReflectionMixer[0]);
         }

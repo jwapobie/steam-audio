@@ -77,6 +77,59 @@ extern std::atomic<bool> gNewReflectionMixerWritten;
 extern std::atomic<bool> gHRTFDisabled;
 extern std::atomic<float> gReverbSmoothingTime;
 
+/**
+ *  Eases the parametric part of reflection effect params (reverb times, and the hybrid EQ) toward each new
+ *  simulation result, block by block, with the time constant set by iplFMODSetReverbSmoothingTime. Real-time
+ *  reflections are a fresh noisy estimate per simulation update, and applied as-is the reverb level jumps at every
+ *  update. One instance per effect; audio thread only.
+ */
+struct ReflectionParamsSmoother
+{
+    float reverbTimes[IPL_NUM_BANDS];
+    float eq[IPL_NUM_BANDS];
+    bool valid = false;
+
+    void reset() { valid = false; }
+
+    void apply(IPLReflectionEffectParams& params, int samplingRate, unsigned int frameSize)
+    {
+        // Reverb times are zero until the first simulation result arrives; there is nothing to ease toward yet.
+        for (auto i = 0; i < IPL_NUM_BANDS; ++i)
+        {
+            if (!(params.reverbTimes[i] > 0.0f))
+            {
+                valid = false;
+                return;
+            }
+        }
+
+        float smoothingTime = gReverbSmoothingTime;
+        if (!valid || smoothingTime <= 0.0f || samplingRate <= 0)
+        {
+            memcpy(reverbTimes, params.reverbTimes, sizeof(reverbTimes));
+            memcpy(eq, params.eq, sizeof(eq));
+            valid = true;
+            return;
+        }
+
+        auto blockDuration = static_cast<float>(frameSize) / static_cast<float>(samplingRate);
+        auto alpha = 1.0f - expf(-blockDuration / smoothingTime);
+
+        for (auto i = 0; i < IPL_NUM_BANDS; ++i)
+        {
+            // Log space for reverb times, so a given ratio changes equally fast whether the reverb is short or long.
+            auto current = logf(reverbTimes[i]);
+            auto target = logf(params.reverbTimes[i]);
+            reverbTimes[i] = expf(current + alpha * (target - current));
+            params.reverbTimes[i] = reverbTimes[i];
+
+            // The EQ is a linear gain that can be zero.
+            eq[i] += alpha * (params.eq[i] - eq[i]);
+            params.eq[i] = eq[i];
+        }
+    }
+};
+
 
 // --------------------------------------------------------------------------------------------------------------------
 // Helper Functions

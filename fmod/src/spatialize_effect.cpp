@@ -156,10 +156,13 @@ struct State
     ParameterSpeakerFormatType outputFormat;
 
     IPLSource simulationSource[2];
+    // Guards simulationSource[1] and newSimulationSourceWritten, so the latest setSource always wins.
+    std::mutex simulationSourceMutex;
     std::atomic<bool> newSimulationSourceWritten;
 
     float prevDirectMixLevel;
     float prevReflectionsMixLevel;
+    ReflectionParamsSmoother reflectionSmoother;
     float prevPathingMixLevel;
 
     IPLAudioBuffer inBuffer;
@@ -466,6 +469,7 @@ void reset(FMOD_DSP_STATE* state)
 
     effect->prevDirectMixLevel = 1.0f;
     effect->prevReflectionsMixLevel = 0.0f;
+    effect->reflectionSmoother.reset();
     effect->prevPathingMixLevel = 0.0f;
 
     effect->panningState = IPL_AUDIOEFFECTSTATE_TAILCOMPLETE;
@@ -508,7 +512,8 @@ FMOD_RESULT F_CALL release(FMOD_DSP_STATE* state)
     iplSourceRelease(&effect->simulationSource[0]);
     iplSourceRelease(&effect->simulationSource[1]);
 
-    delete state->plugindata;
+    // State now has a non-trivial member (the mutex); deleting through void* would skip its destructor.
+    delete effect;
 
     return FMOD_OK;
 }
@@ -716,16 +721,18 @@ void setSource(FMOD_DSP_STATE* state,
 {
     auto effect = reinterpret_cast<State*>(state->plugindata);
 
+    // Stock Steam Audio drops a new source while the previous one is still waiting for the audio thread, so two
+    // quick rebinds could leave the effect reading the wrong source for good. Games that rebind at runtime (e.g. to
+    // hand a pooled reflection source to an event) need the last write to win, so this takes a short lock instead.
+    std::lock_guard<std::mutex> lock(effect->simulationSourceMutex);
+
     if (source == effect->simulationSource[1])
         return;
 
-    if (!effect->newSimulationSourceWritten)
-    {
-        iplSourceRelease(&effect->simulationSource[1]);
-        effect->simulationSource[1] = iplSourceRetain(source);
+    iplSourceRelease(&effect->simulationSource[1]);
+    effect->simulationSource[1] = iplSourceRetain(source);
 
-        effect->newSimulationSourceWritten = true;
-    }
+    effect->newSimulationSourceWritten = true;
 }
 
 FMOD_RESULT F_CALL setInt(FMOD_DSP_STATE* state,
@@ -1093,6 +1100,8 @@ FMOD_RESULT F_CALL process(FMOD_DSP_STATE* state,
 
         if (effect->newSimulationSourceWritten)
         {
+            std::lock_guard<std::mutex> lock(effect->simulationSourceMutex);
+
             iplSourceRelease(&effect->simulationSource[0]);
             effect->simulationSource[0] = iplSourceRetain(effect->simulationSource[1]);
 
@@ -1224,6 +1233,9 @@ FMOD_RESULT F_CALL process(FMOD_DSP_STATE* state,
                     reflectionParams.numChannels = numChannelsForOrder(gSimulationSettings.maxOrder);
                     reflectionParams.irSize = numSamplesForDuration(gSimulationSettings.maxDuration, static_cast<int>(samplingRate));
                     reflectionParams.tanDevice = gSimulationSettings.tanDevice;
+
+                    if (reflectionParams.type == IPL_REFLECTIONEFFECTTYPE_PARAMETRIC || reflectionParams.type == IPL_REFLECTIONEFFECTTYPE_HYBRID)
+                        effect->reflectionSmoother.apply(reflectionParams, static_cast<int>(samplingRate), frameSize);
 
                     effect->reflectionState = iplReflectionEffectApply(effect->reflectionEffect, &reflectionParams, &effect->monoBuffer, &effect->reflectionsBuffer, gReflectionMixer[0]);
                 }
